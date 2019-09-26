@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using SharpCompress.Common;
 using SharpCompress.Common.Rar;
 
@@ -10,7 +11,9 @@ namespace SharpCompress.Compressors.Rar
     {
         private long currentPosition;
         private long maxPosition;
+        private long maxOffset;
 
+        private readonly IEnumerable<RarFilePart> fileParts;
         private IEnumerator<RarFilePart> filePartEnumerator;
         private Stream currentStream;
 
@@ -23,7 +26,9 @@ namespace SharpCompress.Compressors.Rar
         {
             this.streamListener = streamListener;
 
-            filePartEnumerator = parts.GetEnumerator();
+            fileParts = parts;
+            maxOffset = fileParts.Select(filePart => filePart.FileHeader.CompressedSize).Sum();
+            filePartEnumerator = fileParts.GetEnumerator();
             filePartEnumerator.MoveNext();
             InitializeNextFilePart();
         }
@@ -55,6 +60,26 @@ namespace SharpCompress.Compressors.Rar
             streamListener.FireFilePartExtractionBegin(filePartEnumerator.Current.FilePartName,
                                                        filePartEnumerator.Current.FileHeader.CompressedSize,
                                                        filePartEnumerator.Current.FileHeader.UncompressedSize);
+        }
+
+        private int GetFilePart(long offset)
+        {
+            if (offset > maxOffset)
+            {
+                return fileParts.Count() - 1;
+            }
+
+            RarFilePart currentPart = fileParts.First();
+            long currentOffset = currentPart.GetCompressedStream().Length;
+            int currentFile = 0;
+
+            while (currentOffset < offset)
+            {
+                currentPart = fileParts.ElementAt(++currentFile);
+                currentOffset += currentPart.FileHeader.CompressedSize;
+            }
+
+            return currentFile;
         }
 
         public override int Read(byte[] buffer, int offset, int count)
@@ -108,7 +133,7 @@ namespace SharpCompress.Compressors.Rar
 
         public override bool CanRead => true;
 
-        public override bool CanSeek => false;
+        public override bool CanSeek => true;
 
         public override bool CanWrite => false;
 
@@ -125,7 +150,29 @@ namespace SharpCompress.Compressors.Rar
 
         public override long Seek(long offset, SeekOrigin origin)
         {
-            throw new NotSupportedException();
+
+            var part = GetFilePart(offset);
+
+            for (int i = 0; i < part; i++)
+            {
+                filePartEnumerator.MoveNext();
+            }
+
+            filePartEnumerator = fileParts.Where((filePart, index) => index >= part).GetEnumerator();
+            filePartEnumerator.MoveNext();
+            InitializeNextFilePart();
+
+            long currentOffset = fileParts.Where((filePart, index) => index < part)
+                .Select(filePart => filePart.FileHeader.CompressedSize)
+                .Sum();
+
+            long currentFileOffset = offset - currentOffset;
+
+            currentStream.Seek(currentFileOffset, SeekOrigin.Begin);
+
+            currentPosition = currentFileOffset;
+
+            return currentPosition;
         }
 
         public override void SetLength(long value)

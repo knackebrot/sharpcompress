@@ -20,6 +20,7 @@ namespace SharpCompress.Compressors.Rar
         private int outOffset;
         private int outCount;
         private int outTotal;
+        private long currentPosition;
         private bool isDisposed;
 
         public RarStream(IRarUnpack unpack, FileHeader fileHeader, Stream readStream)
@@ -43,7 +44,7 @@ namespace SharpCompress.Compressors.Rar
 
         public override bool CanRead => true;
 
-        public override bool CanSeek => false;
+        public override bool CanSeek => true;
 
         public override bool CanWrite => false;
 
@@ -53,7 +54,7 @@ namespace SharpCompress.Compressors.Rar
 
         public override long Length => fileHeader.UncompressedSize;
 
-        public override long Position { get => fileHeader.UncompressedSize - unpack.DestSize; set => throw new NotSupportedException(); }
+        public override long Position { get => currentPosition; set => Seek(value, SeekOrigin.Begin); }
 
         public override int Read(byte[] buffer, int offset, int count)
         {
@@ -76,13 +77,15 @@ namespace SharpCompress.Compressors.Rar
                 fetch = true;
                 unpack.DoUnpack();
                 fetch = false;
+                currentPosition += count;
             }
+
             return outTotal;
         }
 
         public override long Seek(long offset, SeekOrigin origin)
         {
-            throw new NotSupportedException();
+            return readStream.Seek(offset, origin);
         }
 
         public override void SetLength(long value)
